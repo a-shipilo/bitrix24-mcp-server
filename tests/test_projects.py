@@ -285,39 +285,61 @@ async def test_sprint_board_needs_an_active_sprint(connect, bitrix):
     assert missing_args.isError
 
 
+def board_move(tasks: list[dict[str, Any]], *, moves: bool = True):
+    """task.stages.movetask that moves the card on the fake board and updates the task's own stage."""
+
+    def handler(params: dict[str, Any]) -> dict[str, Any]:
+        if moves:
+            for t in tasks:
+                if int(t["id"]) == params["id"]:
+                    t["_board_column"] = params["stageId"]
+                    t["stageId"] = str(params["stageId"])
+        return {"result": True}
+
+    return handler
+
+
 async def test_sprint_move_task(connect, bitrix):
-    setup_sprint(bitrix, [task(3, 51)], {3: {"entityId": 5}})
-    bitrix.on("tasks.task.get", {"task": task(3, 51)})
-    bitrix.on("tasks.api.scrum.kanban.deleteTask", True)
-    bitrix.on("tasks.api.scrum.kanban.addTask", True)
+    tasks = [task(3, 0, _board_column=51)]  # on the board in "Новые" with a stale stageId
+    setup_sprint(bitrix, tasks, {3: {"entityId": 5}})
+    bitrix.on("tasks.task.get", {"task": task(3, 0)})
+    bitrix.on("task.stages.movetask", handler=board_move(tasks))
     async with connect() as session:
         pending = payload(await session.call_tool("sprint_move_task", {"sprint_id": 5, "task_id": 3, "stage_id": 53}))
         assert "Перенос задачи #3 «Задача 3» в спринте «Спринт 7»" in pending["preview"]
         assert "Стадия: Новые → Готово" in pending["preview"]
-        assert bitrix.called("tasks.api.scrum.kanban.addTask") == []
+        assert bitrix.called("task.stages.movetask") == []
         done = payload(await session.call_tool("confirm_action", {"confirmation_id": pending["confirmation_id"]}))
     assert done["result"] == {"task_id": 3, "sprint_id": 5, "stage_id": 53, "stage": "Готово"}
-    assert bitrix.called("tasks.api.scrum.kanban.deleteTask") == [{"sprintId": 5, "taskId": 3}]
-    assert bitrix.called("tasks.api.scrum.kanban.addTask") == [{"sprintId": 5, "taskId": 3, "stageId": 53}]
+    assert bitrix.called("task.stages.movetask") == [{"id": 3, "stageId": 53}]
+    assert bitrix.called("tasks.api.scrum.kanban.deleteTask") == []
+    assert bitrix.called("tasks.api.scrum.kanban.addTask") == []
+    assert tasks[0]["stageId"] == "53"
 
 
-async def test_sprint_move_task_restores_stage_when_move_fails(connect, bitrix):
-    setup_sprint(bitrix, [task(3, 52)], {3: {"entityId": 5}})
+async def test_sprint_move_task_reports_when_the_board_did_not_change(connect, bitrix):
+    tasks = [task(3, 52, _board_column=52)]
+    setup_sprint(bitrix, tasks, {3: {"entityId": 5}})
     bitrix.on("tasks.task.get", {"task": task(3, 52)})
-    bitrix.on("tasks.api.scrum.kanban.deleteTask", True)
-
-    def add_task(params):
-        if params["stageId"] == 53:
-            return {"error": 0, "error_description": "Access denied"}
-        return {"result": True}
-
-    bitrix.on("tasks.api.scrum.kanban.addTask", handler=add_task)
+    bitrix.on("task.stages.movetask", handler=board_move(tasks, moves=False))
     async with connect(confirm_tasks=False) as session:
         result = await session.call_tool("sprint_move_task", {"sprint_id": 5, "task_id": 3, "stage_id": 53})
     assert result.isError
-    assert "Access denied" in result.content[0].text
-    assert "осталась на стадии «В работе»" in result.content[0].text
-    assert [c["stageId"] for c in bitrix.called("tasks.api.scrum.kanban.addTask")] == [53, 52]
+    assert "на доске спринта задача сейчас: «В работе»" in result.content[0].text
+
+
+async def test_sprint_move_task_passes_on_refusals(connect, bitrix):
+    setup_sprint(bitrix, [task(3, 52, _board_column=52)], {3: {"entityId": 5}})
+    bitrix.on("tasks.task.get", {"task": task(3, 52)})
+    bitrix.on(
+        "task.stages.movetask",
+        handler=lambda _: {"error": "ACCESS_DENIED_MOVE", "error_description": "You cannot move this task"},
+    )
+    async with connect(confirm_tasks=False) as session:
+        result = await session.call_tool("sprint_move_task", {"sprint_id": 5, "task_id": 3, "stage_id": 53})
+    assert result.isError
+    assert "ACCESS_DENIED_MOVE" in result.content[0].text
+    assert len(bitrix.called("task.stages.movetask")) == 1
 
 
 async def test_sprint_move_task_checks_sprint_membership(connect, bitrix):

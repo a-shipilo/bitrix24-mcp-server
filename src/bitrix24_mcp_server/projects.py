@@ -1,7 +1,6 @@
 """Projects (workgroups) with their kanban boards, and Scrum: sprints, sprint boards and backlog."""
 
 import asyncio
-import contextlib
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
@@ -432,28 +431,15 @@ def register_project_tools(mcp: FastMCP, get_client: Callable[[], Bitrix24Client
         current = ((await resolve_sprint_stages(client, base_filter, stages, [task], 1)) or {}).get(task_id)
 
         async def run() -> dict[str, Any]:
-            # addTask places a task into a column; removing it first keeps the card from ending up twice.
-            with contextlib.suppress(Bitrix24Error):  # the task may not be on the board yet
-                await client.call("tasks.api.scrum.kanban.deleteTask", {"sprintId": sprint_id, "taskId": task_id})
-            try:
-                await client.call(
-                    "tasks.api.scrum.kanban.addTask", {"sprintId": sprint_id, "taskId": task_id, "stageId": stage_id}
-                )
-            except Bitrix24Error as exc:
-                fallback = current or stages[0]["id"]
-                try:
-                    await client.call(
-                        "tasks.api.scrum.kanban.addTask",
-                        {"sprintId": sprint_id, "taskId": task_id, "stageId": fallback},
-                    )
-                except Bitrix24Error:
-                    raise ToolError(
-                        f"Не удалось перенести задачу ({exc}) и вернуть её на доску спринта. "
-                        "Задача осталась в спринте, но её нужно заново поставить на стадию."
-                    ) from exc
+            # task.stages.movetask moves the card like a drag on the board and keeps the task's own
+            # STAGE_ID in step. kanban.deleteTask + addTask would leave STAGE_ID at 0.
+            await client.call("task.stages.movetask", {"id": task_id, "stageId": stage_id})
+            placed = await resolve_sprint_stages(client, base_filter, stages, [task], 1)
+            if placed is not None and placed.get(task_id) != stage_id:
+                actual = titles.get(placed.get(task_id), "не на доске")
                 raise ToolError(
-                    f"Не удалось перенести задачу ({exc}). Она осталась на стадии «{titles[fallback]}»"
-                ) from exc
+                    f"Битрикс24 принял перенос, но на доске спринта задача сейчас: «{actual}». Проверьте её вручную"
+                )
             return {"task_id": task_id, "sprint_id": sprint_id, "stage_id": stage_id, "stage": titles[stage_id]}
 
         summary = build_summary(
