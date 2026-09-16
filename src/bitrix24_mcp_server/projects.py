@@ -13,9 +13,9 @@ from .approval import ApprovalPolicy
 from .client import Bitrix24Client, Bitrix24Error
 from .crm import compact
 from .preview import build_summary, quoted
-from .tasks import TASK_STATUSES, fetch_task, task_title
+from .tasks import TASK_STATUSES, fetch_task, tag_names, task_title
 
-BOARD_TASK_SELECT = ["ID", "TITLE", "STATUS", "PRIORITY", "RESPONSIBLE_ID", "DEADLINE", "STAGE_ID"]
+BOARD_TASK_SELECT = ["ID", "TITLE", "STATUS", "PRIORITY", "RESPONSIBLE_ID", "DEADLINE", "STAGE_ID", "TAGS"]
 GROUP_TYPES = {"group": "группа", "project": "проект", "scrum": "скрам"}
 SPRINT_STATUSES = {"planned": "запланирован", "active": "активный", "completed": "завершён"}
 
@@ -77,6 +77,7 @@ def brief_task(task: dict[str, Any]) -> dict[str, Any]:
             "status": TASK_STATUSES.get(str(task.get("status")), task.get("status")),
             "responsible": responsible.get("name") or task.get("responsibleId"),
             "deadline": task.get("deadline"),
+            "tags": tag_names(task.get("tags")),
             "high_priority": True if str(task.get("priority")) == "2" else None,
         }
     )
@@ -431,21 +432,29 @@ def register_project_tools(mcp: FastMCP, get_client: Callable[[], Bitrix24Client
         current = ((await resolve_sprint_stages(client, base_filter, stages, [task], 1)) or {}).get(task_id)
 
         async def run() -> dict[str, Any]:
+            if current is None:
+                # A task added to a running sprint through REST is not on the board yet,
+                # and task.stages.movetask silently ignores such tasks.
+                await client.call(
+                    "tasks.api.scrum.kanban.addTask", {"sprintId": sprint_id, "taskId": task_id, "stageId": stage_id}
+                )
             # task.stages.movetask moves the card like a drag on the board and keeps the task's own
-            # STAGE_ID in step. kanban.deleteTask + addTask would leave STAGE_ID at 0.
+            # STAGE_ID in step; kanban.addTask alone leaves STAGE_ID at 0.
             await client.call("task.stages.movetask", {"id": task_id, "stageId": stage_id})
-            placed = await resolve_sprint_stages(client, base_filter, stages, [task], 1)
-            if placed is not None and placed.get(task_id) != stage_id:
-                actual = titles.get(placed.get(task_id), "не на доске")
+            moved = await fetch_task(client, task_id, ["ID", "STAGE_ID"])
+            placed = await resolve_sprint_stages(client, base_filter, stages, [moved], 1)
+            actual = (placed or {}).get(task_id)
+            if actual != stage_id:
+                where = f"«{titles[actual]}»" if actual in titles else "не на доске"
                 raise ToolError(
-                    f"Битрикс24 принял перенос, но на доске спринта задача сейчас: «{actual}». Проверьте её вручную"
+                    f"Битрикс24 принял перенос, но на доске спринта задача сейчас {where}. Проверьте её вручную"
                 )
             return {"task_id": task_id, "sprint_id": sprint_id, "stage_id": stage_id, "stage": titles[stage_id]}
 
         summary = build_summary(
             f"Перенос {task_title(task_id, task)} в спринте{quoted(sprint.get('name'))}",
             client.portal_url,
-            [f"Стадия: {titles.get(current, '—')} → {titles[stage_id]}"],
+            [f"Стадия: {titles.get(current, 'нет на доске')} → {titles[stage_id]}"],
         )
         return await approval.request(ctx, "sprint_move_task", summary, run)
 

@@ -291,7 +291,8 @@ def board_move(tasks: list[dict[str, Any]], *, moves: bool = True):
     def handler(params: dict[str, Any]) -> dict[str, Any]:
         if moves:
             for t in tasks:
-                if int(t["id"]) == params["id"]:
+                # Like the portal, movetask leaves alone a task that is not on the board.
+                if int(t["id"]) == params["id"] and "_board_column" in t:
                     t["_board_column"] = params["stageId"]
                     t["stageId"] = str(params["stageId"])
         return {"result": True}
@@ -317,6 +318,31 @@ async def test_sprint_move_task(connect, bitrix):
     assert tasks[0]["stageId"] == "53"
 
 
+async def test_sprint_move_task_puts_a_task_on_the_board_first(connect, bitrix):
+    tasks = [task(3, 0), task(4, 51, _board_column=51)]  # task 3 is in the sprint but not on the board
+
+    def add_task(params):
+        for t in tasks:
+            if int(t["id"]) == params["taskId"]:
+                t["_board_column"] = params["stageId"]  # stageId stays 0, as on the portal
+        return {"result": True}
+
+    setup_sprint(bitrix, tasks, {3: {"entityId": 5}})
+    bitrix.on(
+        "tasks.task.get", handler=lambda p: {"result": {"task": next(t for t in tasks if int(t["id"]) == p["taskId"])}}
+    )
+    bitrix.on("tasks.api.scrum.kanban.addTask", handler=add_task)
+    bitrix.on("task.stages.movetask", handler=board_move(tasks))
+    async with connect() as session:
+        pending = payload(await session.call_tool("sprint_move_task", {"sprint_id": 5, "task_id": 3, "stage_id": 51}))
+        assert "Стадия: нет на доске → Новые" in pending["preview"]
+        done = payload(await session.call_tool("confirm_action", {"confirmation_id": pending["confirmation_id"]}))
+    assert done["result"]["stage"] == "Новые"
+    assert bitrix.called("tasks.api.scrum.kanban.addTask") == [{"sprintId": 5, "taskId": 3, "stageId": 51}]
+    assert bitrix.called("task.stages.movetask") == [{"id": 3, "stageId": 51}]
+    assert tasks[0]["stageId"] == "51"
+
+
 async def test_sprint_move_task_reports_when_the_board_did_not_change(connect, bitrix):
     tasks = [task(3, 52, _board_column=52)]
     setup_sprint(bitrix, tasks, {3: {"entityId": 5}})
@@ -325,7 +351,7 @@ async def test_sprint_move_task_reports_when_the_board_did_not_change(connect, b
     async with connect(confirm_tasks=False) as session:
         result = await session.call_tool("sprint_move_task", {"sprint_id": 5, "task_id": 3, "stage_id": 53})
     assert result.isError
-    assert "на доске спринта задача сейчас: «В работе»" in result.content[0].text
+    assert "на доске спринта задача сейчас «В работе»" in result.content[0].text
 
 
 async def test_sprint_move_task_passes_on_refusals(connect, bitrix):

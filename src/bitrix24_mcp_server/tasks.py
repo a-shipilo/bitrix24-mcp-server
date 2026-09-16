@@ -35,6 +35,7 @@ DEFAULT_TASK_SELECT = [
     "CREATED_BY",
     "GROUP_ID",
     "STAGE_ID",
+    "TAGS",
     "DEADLINE",
     "CREATED_DATE",
     "CHANGED_DATE",
@@ -61,8 +62,16 @@ _CREATE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHi
 _CHANGE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True)
 
 
+def tag_names(tags: Any) -> list[str]:
+    """Bitrix24 returns tags as {"562": {"id": 562, "title": "hds-api-server"}, ...}."""
+    items = tags.values() if isinstance(tags, dict) else tags or []
+    return [str(t.get("title") if isinstance(t, dict) else t) for t in items]
+
+
 def describe_task(task: dict[str, Any]) -> dict[str, Any]:
     task = compact(task)
+    if "tags" in task:
+        task["tags"] = tag_names(task["tags"])
     status = str(task.get("status", ""))
     if status in TASK_STATUSES:
         task["statusName"] = TASK_STATUSES[status]
@@ -140,7 +149,7 @@ def register_task_tools(mcp: FastMCP, get_client: Callable[[], Bitrix24Client], 
                 description=(
                     "Фильтр в UPPER_CASE с префиксами >, >=, <, <=, !, %. Статусы (REAL_STATUS): "
                     "2 — ждёт выполнения, 3 — выполняется, 4 — ждёт контроля, 5 — завершена, 6 — отложена; "
-                    "STATUS: -1 — просрочена. GROUP_ID — проект, STAGE_ID — стадия канбана, "
+                    "STATUS: -1 — просрочена. GROUP_ID — проект, STAGE_ID — стадия канбана, TAG — тег, "
                     "SPRINT_ID и BACKLOG_ID — спринт и бэклог скрама. Пример: "
                     '{"RESPONSIBLE_ID": 1, "!REAL_STATUS": 5, "<DEADLINE": "2026-10-01"}'
                 )
@@ -179,7 +188,7 @@ def register_task_tools(mcp: FastMCP, get_client: Callable[[], Bitrix24Client], 
         Содержимое вложения — task_file_read, комментарии — task_comments."""
         client = get_client()
         # Without an explicit select Bitrix24 leaves out custom fields, attachments among them.
-        task = describe_task(await fetch_task(client, id, ["*", "UF_*"]))
+        task = describe_task(await fetch_task(client, id, ["*", "UF_*", "TAGS"]))
         if task.get("ufTaskWebdavFiles"):
             with contextlib.suppress(Bitrix24Error):  # the task itself is still useful without the file list
                 task["files"] = describe_files(await client.call("task.item.getfiles", {"TASKID": id}))

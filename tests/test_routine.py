@@ -42,7 +42,17 @@ def test_auto_approve_setting_is_read_from_environment(monkeypatch):
 
 
 async def test_task_get_lists_attachments(connect, bitrix):
-    bitrix.on("tasks.task.get", {"task": {"id": "8", "title": "Отчёт", "ufTaskWebdavFiles": [21944]}})
+    bitrix.on(
+        "tasks.task.get",
+        {
+            "task": {
+                "id": "8",
+                "title": "Отчёт",
+                "ufTaskWebdavFiles": [21944],
+                "tags": {"562": {"id": 562, "title": "hds-api-server"}, "564": {"id": 564, "title": "add-triggers"}},
+            }
+        },
+    )
     bitrix.on(
         "task.item.getfiles",
         [{"ATTACHMENT_ID": 21944, "NAME": "stages.tsv", "SIZE": "15477", "DOWNLOAD_URL": bitrix.file_link(21944)}],
@@ -50,8 +60,9 @@ async def test_task_get_lists_attachments(connect, bitrix):
     async with connect() as session:
         task = payload(await session.call_tool("task_get", {"id": 8}))
     assert task["files"] == [{"id": 21944, "name": "stages.tsv", "size": 15477}]
+    assert task["tags"] == ["hds-api-server", "add-triggers"]
     assert "s3cr3t-token" not in str(task)
-    assert bitrix.called("tasks.task.get") == [{"taskId": 8, "select": ["*", "UF_*"]}]
+    assert bitrix.called("tasks.task.get") == [{"taskId": 8, "select": ["*", "UF_*", "TAGS"]}]
 
 
 def attach(bitrix, content: bytes, **serve_options) -> None:
