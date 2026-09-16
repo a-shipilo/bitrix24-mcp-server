@@ -94,3 +94,16 @@ async def test_network_errors_are_retried_then_reported():
     with pytest.raises(Bitrix24Error, match="NETWORK_ERROR"):
         await client.call("user.current")
     assert len(attempts) == 2
+
+
+async def test_lost_answers_are_not_retried():
+    attempts = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        attempts.append(request)
+        raise httpx.ReadTimeout("no answer", request=request)
+
+    client = Bitrix24Client(WEBHOOK, transport=httpx.MockTransport(handle), max_retries=3, retry_delay=0)
+    with pytest.raises(Bitrix24Error, match="NETWORK_ERROR"):
+        await client.call("task.commentitem.add", {"TASKID": 1})
+    assert len(attempts) == 1

@@ -137,7 +137,7 @@ Every write operation requires explicit user approval. Run it with
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/a-shipilo/bitrix24-mcp-server@v0.2.0",
+        "git+https://github.com/a-shipilo/bitrix24-mcp-server@v0.2.1",
         "bitrix24-mcp-server"
       ],
       "env": {
@@ -151,7 +151,7 @@ Every write operation requires explicit user approval. Run it with
 3. Полностью перезапустите Claude Desktop. Сервер `bitrix24` появится в **Settings → Developer**
    со статусом *running*, а его инструменты — в меню подключений в чате.
 
-`@v0.2.0` фиксирует версию. Чтобы всегда брать последнюю версию из `main`, уберите `@v0.2.0`.
+`@v0.2.1` фиксирует версию. Чтобы всегда брать последнюю версию из `main`, уберите `@v0.2.1`.
 Для обновления добавьте в `args` перед `--from` флаг `--refresh`.
 
 Если в логах `spawn uvx ENOENT`, укажите полный путь к uvx (узнать его: `which uvx`),
@@ -183,7 +183,7 @@ claude mcp add bitrix24 -e BITRIX24_WEBHOOK_URL=https://your-portal.bitrix24.ru/
 ```json
 "bitrix24-routine": {
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/a-shipilo/bitrix24-mcp-server@v0.2.0", "bitrix24-mcp-server"],
+  "args": ["--from", "git+https://github.com/a-shipilo/bitrix24-mcp-server@v0.2.1", "bitrix24-mcp-server"],
   "env": {
     "BITRIX24_WEBHOOK_URL": "https://your-portal.bitrix24.ru/rest/1/xxxxxxxxxxxxxxxx/",
     "BITRIX24_AUTO_APPROVE": "task_add_comment,task_move_stage,sprint_move_task"

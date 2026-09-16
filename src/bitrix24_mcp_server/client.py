@@ -16,6 +16,9 @@ _WEBHOOK_RE = re.compile(r"^(?P<base>https?://[^/\s]+)/rest/(?P<user>\d+)/(?P<to
 
 # Bitrix24 answers these when the portal is throttling requests; waiting and retrying helps.
 _RETRYABLE_ERRORS = frozenset({"QUERY_LIMIT_EXCEEDED"})
+# Only failures before the request reached the portal are retried: repeating a write whose answer
+# was lost could create a duplicate comment or task.
+_RETRYABLE_TRANSPORT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 
 BATCH_LIMIT = 50
 
@@ -104,7 +107,7 @@ class Bitrix24Client:
             try:
                 response = await self._http.post(url, json=params or {})
             except httpx.TransportError as exc:
-                if not is_last:
+                if isinstance(exc, _RETRYABLE_TRANSPORT_ERRORS) and not is_last:
                     await asyncio.sleep(self._retry_delay * 2**attempt)
                     continue
                 raise Bitrix24Error("NETWORK_ERROR", self._redact(str(exc) or type(exc).__name__)) from None
