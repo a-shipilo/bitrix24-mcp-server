@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import secrets
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -130,21 +130,30 @@ class ApprovalGate:
 
 
 class ApprovalPolicy:
-    """Approval for a group of tools that the user may exempt from confirmation (e.g. tasks)."""
+    """Approval for tools that the user may let run without confirmation, e.g. in unattended routines.
+
+    CRM tools never go through a policy: they always call the gate directly.
+    """
 
     NOTE = " Требует подтверждения пользователя."
 
-    def __init__(self, gate: ApprovalGate, *, required: bool = True):
+    def __init__(self, gate: ApprovalGate, *, required: bool = True, auto_approve: Iterable[str] = ()):
         self.gate = gate
         self.required = required
+        self.auto_approve = frozenset(auto_approve)
+        self.tools: set[str] = set()
 
-    def describe(self, description: str) -> str:
-        return description + self.NOTE if self.required else description
+    def needs_approval(self, tool: str) -> bool:
+        return self.required and tool not in self.auto_approve
 
-    async def request(self, ctx: Context, summary: str, run: Operation) -> dict[str, Any]:
-        if self.required:
+    def describe(self, tool: str, description: str) -> str:
+        self.tools.add(tool)
+        return description + self.NOTE if self.needs_approval(tool) else description
+
+    async def request(self, ctx: Context, tool: str, summary: str, run: Operation) -> dict[str, Any]:
+        if self.needs_approval(tool):
             return await self.gate.request(ctx, summary, run)
-        return {"status": "done", "result": await run()}
+        return {"status": "done", "operation": summary, "result": await run()}
 
 
 def _supports_elicitation(ctx: Context) -> bool:

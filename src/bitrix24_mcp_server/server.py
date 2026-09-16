@@ -3,6 +3,8 @@
 import argparse
 import logging
 import os
+import re
+from collections.abc import Iterable
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
@@ -12,6 +14,7 @@ from pydantic import Field
 
 from . import __version__
 from .approval import APPROVAL_MODES, ApprovalGate, ApprovalPolicy
+from .bizproc import register_bizproc_tools
 from .client import Bitrix24Client
 from .crm import register_crm_tools
 from .projects import register_project_tools
@@ -19,7 +22,7 @@ from .schema import PlainSchemaFastMCP
 from .tasks import register_task_tools
 
 INSTRUCTIONS = """\
-Сервер работает с CRM, задачами, проектами и скрамом Битрикс24 через входящий вебхук.
+Сервер работает с CRM, задачами, проектами, скрамом и бизнес-процессами Битрикс24 через входящий вебхук.
 
 CRM (crm_*): поля в camelCase (title, stageId, opportunity, assignedById, ufCrm...).
 Названия полей и варианты списков — crm_fields, стадии сделок и статусы лидов — crm_stages.
@@ -27,6 +30,8 @@ CRM (crm_*): поля в camelCase (title, stageId, opportunity, assignedById, u
 ID сотрудников — users_search и user_current.
 Проекты и скрамы — projects_list. Канбан проекта — project_board, перенос по стадиям — task_move_stage.
 Скрам: спринты — scrum_sprints, доска спринта — sprint_board, перенос — sprint_move_task, бэклог — scrum_backlog.
+Бизнес-процессы (bp_*): шаблоны и их устройство, запуск, запущенные процессы, остановка, задания.
+Создавать и менять шаблоны бизнес-процессов через вебхук нельзя — это ограничение Битрикс24.
 
 Любое создание, изменение или удаление требует согласия пользователя.
 Если инструмент вернул status=confirmation_required, операция ещё не выполнена:
@@ -44,14 +49,27 @@ def _env_flag(name: str, default: bool) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off", "нет"}
 
 
+def _env_list(name: str) -> list[str]:
+    return [item for item in re.split(r"[\s,;]+", os.environ.get(name, "")) if item]
+
+
 def create_server(
     client: Bitrix24Client | None,
     gate: ApprovalGate,
     *,
     confirm_tasks: bool = True,
+    auto_approve: Iterable[str] = (),
     config_error: str | None = None,
 ) -> FastMCP:
-    mcp = PlainSchemaFastMCP("bitrix24", instructions=INSTRUCTIONS, log_level="WARNING")
+    auto_approve = frozenset(auto_approve)
+    instructions = INSTRUCTIONS
+    if auto_approve:
+        instructions += (
+            "\nБез подтверждения (настройка BITRIX24_AUTO_APPROVE) сразу выполняются: "
+            + ", ".join(sorted(auto_approve))
+            + ".\n"
+        )
+    mcp = PlainSchemaFastMCP("bitrix24", instructions=instructions, log_level="WARNING")
 
     def get_client() -> Bitrix24Client:
         if client is None:
@@ -59,9 +77,17 @@ def create_server(
         return client
 
     register_crm_tools(mcp, get_client, gate)
-    task_approval = ApprovalPolicy(gate, required=confirm_tasks)
+    task_approval = ApprovalPolicy(gate, required=confirm_tasks, auto_approve=auto_approve)
+    bizproc_approval = ApprovalPolicy(gate, auto_approve=auto_approve)
     register_task_tools(mcp, get_client, task_approval)
     register_project_tools(mcp, get_client, task_approval)
+    register_bizproc_tools(mcp, get_client, bizproc_approval)
+    ignored = auto_approve - task_approval.tools - bizproc_approval.tools
+    if ignored:
+        logger.warning(
+            "BITRIX24_AUTO_APPROVE: %s — таких инструментов нет или их нельзя выполнять без подтверждения (CRM)",
+            ", ".join(sorted(ignored)),
+        )
     _register_approval_tools(mcp, gate)
     return mcp
 
@@ -108,6 +134,7 @@ def build_from_env() -> FastMCP:
         client,
         ApprovalGate(mode),  # type: ignore[arg-type]
         confirm_tasks=_env_flag("BITRIX24_CONFIRM_TASKS", True),
+        auto_approve=_env_list("BITRIX24_AUTO_APPROVE"),
         config_error=config_error,
     )
 
@@ -116,7 +143,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="bitrix24-mcp-server",
         description="MCP-сервер для CRM и задач Битрикс24 (stdio). Настройка через переменные окружения "
-        "BITRIX24_WEBHOOK_URL, BITRIX24_CONFIRM_MODE, BITRIX24_CONFIRM_TASKS.",
+        "BITRIX24_WEBHOOK_URL, BITRIX24_CONFIRM_MODE, BITRIX24_CONFIRM_TASKS, BITRIX24_AUTO_APPROVE.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.parse_args(argv)

@@ -24,6 +24,14 @@ class FakeBitrix:
         self.handlers: dict[str, Handler] = {}
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.batches: list[dict[str, str]] = []
+        self.files: dict[str, tuple[int, str, bytes]] = {}
+        self.downloads: list[str] = []
+
+    def serve_file(self, attached_id: int, content: bytes, *, status: int = 200, content_type: str = "text/plain"):
+        self.files[str(attached_id)] = (status, content_type, content)
+
+    def file_link(self, attached_id: int) -> str:
+        return f"/bitrix/tools/disk/uf.php?attachedId={attached_id}&auth%5Bap%5D=s3cr3t-token&action=download&ncc=1"
 
     def on(self, method: str, result: Any = None, *, handler: Handler | None = None, **extra: Any) -> None:
         self.handlers[method] = handler or (lambda _params: {"result": result, **extra})
@@ -33,6 +41,11 @@ class FakeBitrix:
 
     def transport(self) -> httpx.MockTransport:
         def handle(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/bitrix/tools/disk/uf.php":
+                attached_id = request.url.params["attachedId"]
+                self.downloads.append(attached_id)
+                status, content_type, content = self.files[attached_id]
+                return httpx.Response(status, content=content, headers={"content-type": content_type})
             method = request.url.path.rsplit("/", 1)[-1].removesuffix(".json")
             if "/rest/api/" in request.url.path:
                 method = f"v3:{method}"
@@ -76,8 +89,12 @@ def bitrix() -> FakeBitrix:
 @pytest.fixture
 def connect(bitrix: FakeBitrix):
     @asynccontextmanager
-    async def _connect(*, mode: str = "auto", confirm_tasks: bool = True, elicitation_callback=None):
-        server = create_server(bitrix.client(), ApprovalGate(mode), confirm_tasks=confirm_tasks)
+    async def _connect(
+        *, mode: str = "auto", confirm_tasks: bool = True, auto_approve: tuple[str, ...] = (), elicitation_callback=None
+    ):
+        server = create_server(
+            bitrix.client(), ApprovalGate(mode), confirm_tasks=confirm_tasks, auto_approve=auto_approve
+        )
         async with create_connected_server_and_client_session(
             server, elicitation_callback=elicitation_callback
         ) as session:

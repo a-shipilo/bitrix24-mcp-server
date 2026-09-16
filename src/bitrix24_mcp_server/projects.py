@@ -283,6 +283,7 @@ def register_project_tools(mcp: FastMCP, get_client: Callable[[], Bitrix24Client
         return result
 
     @mcp.tool(annotations=_MOVE, description=approval.describe(
+        "task_move_stage",
         "Перенести задачу проекта на другую стадию канбана (ID стадий — в project_board). "
         "Для задач скрама используйте sprint_move_task."
     ))  # fmt: skip
@@ -312,7 +313,7 @@ def register_project_tools(mcp: FastMCP, get_client: Callable[[], Bitrix24Client
             client.portal_url,
             [f"Стадия: {titles.get(current, '—')} → {titles[stage_id]}"],
         )
-        return await approval.request(ctx, summary, run)
+        return await approval.request(ctx, "task_move_stage", summary, run)
 
     @mcp.tool(annotations=_READ)
     async def scrum_sprints(
@@ -383,6 +384,7 @@ def register_project_tools(mcp: FastMCP, get_client: Callable[[], Bitrix24Client
         return result
 
     @mcp.tool(annotations=_MOVE, description=approval.describe(
+        "sprint_move_task",
         "Перенести задачу на другую стадию канбана спринта (ID стадий — в sprint_board)."
     ))  # fmt: skip
     async def sprint_move_task(
@@ -438,7 +440,7 @@ def register_project_tools(mcp: FastMCP, get_client: Callable[[], Bitrix24Client
             client.portal_url,
             [f"Стадия: {titles.get(current, '—')} → {titles[stage_id]}"],
         )
-        return await approval.request(ctx, summary, run)
+        return await approval.request(ctx, "sprint_move_task", summary, run)
 
     @mcp.tool(annotations=_READ)
     async def scrum_backlog(group_id: GroupIdArg, max_tasks: MaxTasksArg = 100) -> dict[str, Any]:

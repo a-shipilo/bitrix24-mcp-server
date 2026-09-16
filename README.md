@@ -3,13 +3,13 @@
 [![CI](https://github.com/a-shipilo/bitrix24-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/a-shipilo/bitrix24-mcp-server/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-MCP-сервер для работы Claude с **CRM, задачами, проектами и скрамом Битрикс24** через входящий вебхук.
+MCP-сервер для работы Claude с **CRM, задачами, проектами, скрамом и бизнес-процессами Битрикс24** через входящий вебхук.
 Запускается через `uvx` прямо из GitHub, устанавливать ничего не нужно.
 
 Любое создание, изменение или удаление выполняется **только после подтверждения пользователем**.
 
 *English: an open-source MCP server for Bitrix24 CRM (leads, deals, contacts, companies), tasks,
-project kanban boards and Scrum sprints.
+project kanban boards, Scrum sprints and business processes.
 Every write operation requires explicit user approval. Run it with
 `uvx --from git+https://github.com/a-shipilo/bitrix24-mcp-server bitrix24-mcp-server`.*
 
@@ -34,7 +34,9 @@ Every write operation requires explicit user approval. Run it with
 
 | Инструмент | Что делает |
 |---|---|
-| `tasks_list`, `task_get` | поиск задач и карточка задачи |
+| `tasks_list`, `task_get` | поиск задач и карточка задачи со списком вложений |
+| `task_file_read` | содержимое вложения задачи (CSV, TSV, JSON, TXT) или сохранение файла на диск |
+| `task_comments` | последние комментарии задачи: из чата задачи или из ленты комментариев |
 | `task_create` ✋, `task_update` ✋ | создание и изменение, включая привязку к CRM |
 | `task_complete` ✋, `task_delete` ✋ | завершение и удаление |
 | `task_add_comment` ✋ | комментарий: в чат задачи, а на старых порталах — в ленту комментариев |
@@ -52,6 +54,20 @@ Every write operation requires explicit user approval. Run it with
 | `sprint_board` | доска спринта: стадии, задачи, story points и эпики |
 | `sprint_move_task` ✋ | перенос задачи на другую стадию спринта |
 | `scrum_backlog` | бэклог в порядке приоритета со story points и эпиками |
+
+**Бизнес-процессы**
+
+| Инструмент | Что делает |
+|---|---|
+| `bp_templates`, `bp_template` | шаблоны из дизайнера: для каких документов, параметры запуска, дерево действий |
+| `bp_start` ✋ | запуск бизнес-процесса для сделки, лида, контакта, компании или элемента списка |
+| `bp_instances` | запущенные процессы, в том числе процессы роботов CRM и зависшие |
+| `bp_terminate` ✋, `bp_kill` ✋ | остановка процесса; удаление процесса вместе с данными |
+| `bp_tasks` | задания бизнес-процессов: утверждения, ознакомления, запросы информации |
+| `bp_task_complete` ✋, `bp_task_delegate` ✋ | решение по заданию, передача задания другому сотруднику |
+
+Создавать и менять шаблоны бизнес-процессов через входящий вебхук нельзя: Битрикс24 разрешает это
+только приложениям. Методы бизнес-процессов доступны администратору портала.
 
 ✋ — операция выполняется только после подтверждения пользователем.
 
@@ -93,6 +109,11 @@ Every write operation requires explicit user approval. Run it with
    | **Задачи** (`task`) | задачи, чек-листы, канбан проектов, спринты и бэклог |
    | **Пользователи (минимальные)** (`user_brief`) | поиск сотрудников. Чтобы видеть их e-mail, выберите **Пользователи (базовые)** (`user_basic`) |
    | **Рабочие группы** (`sonet_group`) | список проектов и скрамов |
+   | **Диск** (`disk`) | скачивание вложений задач (`task_file_read`) |
+   | **Чат и уведомления** (`im`) | комментарии задач в новой карточке: они хранятся в чате задачи (`task_comments`) |
+   | **Бизнес-процессы** (`bizproc`) | шаблоны, запуск и остановка процессов, задания |
+
+   Права можно добавить позже: адрес вебхука при этом не меняется.
 
 3. Скопируйте адрес вида `https://<ваш-портал>.bitrix24.ru/rest/1/xxxxxxxxxxxxxxxx/`.
 
@@ -116,7 +137,7 @@ Every write operation requires explicit user approval. Run it with
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/a-shipilo/bitrix24-mcp-server@v0.1.1",
+        "git+https://github.com/a-shipilo/bitrix24-mcp-server@v0.2.0",
         "bitrix24-mcp-server"
       ],
       "env": {
@@ -130,7 +151,7 @@ Every write operation requires explicit user approval. Run it with
 3. Полностью перезапустите Claude Desktop. Сервер `bitrix24` появится в **Settings → Developer**
    со статусом *running*, а его инструменты — в меню подключений в чате.
 
-`@v0.1.1` фиксирует версию. Чтобы всегда брать последнюю версию из `main`, уберите `@v0.1.1`.
+`@v0.2.0` фиксирует версию. Чтобы всегда брать последнюю версию из `main`, уберите `@v0.2.0`.
 Для обновления добавьте в `args` перед `--from` флаг `--refresh`.
 
 Если в логах `spawn uvx ENOENT`, укажите полный путь к uvx (узнать его: `which uvx`),
@@ -148,7 +169,30 @@ claude mcp add bitrix24 -e BITRIX24_WEBHOOK_URL=https://your-portal.bitrix24.ru/
 |---|---|---|
 | `BITRIX24_WEBHOOK_URL` | — | адрес входящего вебхука, обязательно |
 | `BITRIX24_CONFIRM_MODE` | `auto` | `auto` — диалог, если клиент его поддерживает, иначе `confirmation_id`; `elicitation` — только диалог; `token` — всегда `confirmation_id` |
-| `BITRIX24_CONFIRM_TASKS` | `true` | `false` — операции с задачами без подтверждения. Для CRM подтверждение отключить нельзя |
+| `BITRIX24_CONFIRM_TASKS` | `true` | `false` — все операции с задачами и проектами без подтверждения |
+| `BITRIX24_AUTO_APPROVE` | — | инструменты, которые выполняются без подтверждения, через запятую, например `task_add_comment,task_move_stage` |
+
+Для CRM подтверждение отключить нельзя: `crm_*` в `BITRIX24_AUTO_APPROVE` игнорируются.
+
+## Автономные сценарии
+
+В рутине, которая работает без человека, подтверждать запись некому. Разрешите нужные инструменты
+через `BITRIX24_AUTO_APPROVE`. Удобно завести для рутины отдельное подключение: в интерактивной
+работе подтверждения останутся.
+
+```json
+"bitrix24-routine": {
+  "command": "uvx",
+  "args": ["--from", "git+https://github.com/a-shipilo/bitrix24-mcp-server@v0.2.0", "bitrix24-mcp-server"],
+  "env": {
+    "BITRIX24_WEBHOOK_URL": "https://your-portal.bitrix24.ru/rest/1/xxxxxxxxxxxxxxxx/",
+    "BITRIX24_AUTO_APPROVE": "task_add_comment,task_move_stage,sprint_move_task"
+  }
+}
+```
+
+Инструмент без подтверждения сразу возвращает `status: done` и в поле `operation` — описание того,
+что было сделано. Его удобно сохранять в журнал рутины.
 
 ## Примеры запросов
 

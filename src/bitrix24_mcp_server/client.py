@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from typing import Any
 from urllib.parse import quote
@@ -118,11 +119,15 @@ class Bitrix24Client:
                 ) from None
 
             if isinstance(data, dict) and "error" in data:
-                code = str(data["error"])
+                error = data["error"]
+                if isinstance(error, dict):  # REST 3.0: {"error": {"code": ..., "message": ...}}
+                    code, description = str(error.get("code")), str(error.get("message") or "")
+                else:
+                    code, description = str(error), str(data.get("error_description") or "")
                 if code in _RETRYABLE_ERRORS and not is_last:
                     await asyncio.sleep(self._retry_delay * 2**attempt)
                     continue
-                raise Bitrix24Error(code, self._redact(str(data.get("error_description") or "")), response.status_code)
+                raise Bitrix24Error(code, self._redact(description), response.status_code)
             if response.status_code >= 400 or not isinstance(data, dict):
                 raise Bitrix24Error(f"HTTP_{response.status_code}", self._redact(str(data)[:300]), response.status_code)
             return data
@@ -147,6 +152,41 @@ class Bitrix24Client:
                 for key, error in data["result_error"].items():
                     errors[key] = Bitrix24Error(str(error.get("error")), str(error.get("error_description") or ""))
         return results, errors
+
+    async def download(self, url: str, *, max_bytes: int) -> bytes:
+        """Download a file by a portal link such as ``DOWNLOAD_URL`` from task.item.getfiles."""
+        if url.startswith("/"):
+            url = self.portal_url + url
+        elif not url.startswith(self.portal_url + "/"):
+            raise Bitrix24Error("DOWNLOAD_ERROR", "Ссылка ведёт не на портал вебхука")
+        try:
+            async with self._http.stream("GET", url, follow_redirects=True) as response:
+                chunks: list[bytes] = []
+                size = 0
+                async for chunk in response.aiter_bytes():
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise Bitrix24Error("FILE_TOO_LARGE", f"Файл больше {max_bytes} байт")
+                    chunks.append(chunk)
+        except httpx.TransportError as exc:
+            raise Bitrix24Error("NETWORK_ERROR", self._redact(str(exc) or type(exc).__name__)) from None
+        content = b"".join(chunks)
+        content_type = response.headers.get("content-type", "")
+        if response.status_code >= 400 or content_type.startswith("application/json"):
+            # Bitrix24 answers a refused download with a small JSON body instead of the file.
+            try:
+                data = json.loads(content)
+            except ValueError:
+                data = None
+            refused = isinstance(data, dict) and data.get("status") == "error" and "errors" in data
+            if response.status_code >= 400 or refused:
+                message = self._redact(content[:300].decode("utf-8", "replace"))
+                if isinstance(data, dict) and data.get("errors"):
+                    message = "; ".join(str(e.get("message")) for e in data["errors"])
+                elif isinstance(data, dict) and data.get("error"):
+                    message = self._redact(str(data.get("error_description") or data["error"]))
+                raise Bitrix24Error("DOWNLOAD_ERROR", message, response.status_code)
+        return content
 
     async def aclose(self) -> None:
         await self._http.aclose()
