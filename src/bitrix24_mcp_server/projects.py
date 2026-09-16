@@ -13,23 +13,11 @@ from pydantic import Field
 from .approval import ApprovalPolicy
 from .client import Bitrix24Client, Bitrix24Error
 from .crm import compact
-from .preview import build_summary, lookup, quoted
+from .preview import build_summary, quoted
 from .tasks import TASK_STATUSES, fetch_task, task_title
 
-GROUP_SELECT = [
-    "ID",
-    "NAME",
-    "DESCRIPTION",
-    "TYPE",
-    "CLOSED",
-    "OWNER_ID",
-    "SCRUM_MASTER_ID",
-    "NUMBER_OF_MEMBERS",
-    "PROJECT_DATE_START",
-    "PROJECT_DATE_FINISH",
-]
 BOARD_TASK_SELECT = ["ID", "TITLE", "STATUS", "PRIORITY", "RESPONSIBLE_ID", "DEADLINE", "STAGE_ID"]
-GROUP_TYPES = {"group": "группа", "project": "проект", "scrum": "скрам", "collab": "коллаба"}
+GROUP_TYPES = {"group": "группа", "project": "проект", "scrum": "скрам"}
 SPRINT_STATUSES = {"planned": "запланирован", "active": "активный", "completed": "завершён"}
 
 MAX_BOARD_TASKS = 500
@@ -46,24 +34,22 @@ _READ = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
 _MOVE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True)
 
 
-def describe_group(group: dict[str, Any]) -> dict[str, Any]:
-    description = str(lookup(group, "DESCRIPTION") or "")
+def describe_group(group: dict[str, Any], is_scrum: bool) -> dict[str, Any]:
+    description = str(group.get("DESCRIPTION") or "")
     if len(description) > MAX_DESCRIPTION_LENGTH:
         description = description[:MAX_DESCRIPTION_LENGTH] + "…"
-    group_type = lookup(group, "TYPE")
+    group_type = "scrum" if is_scrum else "project" if group.get("PROJECT") == "Y" else "group"
     return compact(
         {
-            "id": int(lookup(group, "ID")),
-            "name": lookup(group, "NAME"),
+            "id": int(group["ID"]),
+            "name": group.get("NAME"),
             "type": group_type,
-            "type_name": GROUP_TYPES.get(str(group_type)),
+            "type_name": GROUP_TYPES[group_type],
             "description": description,
-            "closed": lookup(group, "CLOSED") in ("Y", True),
-            "owner_id": lookup(group, "OWNER_ID"),
-            "scrum_master_id": lookup(group, "SCRUM_MASTER_ID") or None,
-            "members": lookup(group, "NUMBER_OF_MEMBERS"),
-            "date_start": lookup(group, "PROJECT_DATE_START"),
-            "date_finish": lookup(group, "PROJECT_DATE_FINISH"),
+            "closed": group.get("CLOSED") == "Y",
+            "owner_id": group.get("OWNER_ID"),
+            "members": group.get("NUMBER_OF_MEMBERS"),
+            "last_activity": group.get("DATE_ACTIVITY"),
         }
     )
 
@@ -246,18 +232,23 @@ def register_project_tools(mcp: FastMCP, get_client: Callable[[], Bitrix24Client
     ) -> dict[str, Any]:
         """Найти проекты, рабочие группы и скрамы, доступные пользователю вебхука.
         Для type=scrum используйте scrum_sprints, sprint_board и scrum_backlog, для остальных — project_board."""
+        client = get_client()
         group_filter: dict[str, Any] = {"ACTIVE": "Y"}
         if not include_closed:
             group_filter["CLOSED"] = "N"
         if query:
             group_filter["%NAME"] = query
-        response = await get_client().call_raw(
-            "socialnetwork.api.workgroup.list",
-            {"filter": group_filter, "select": GROUP_SELECT, "order": {"NAME": "ASC"}, "start": start},
+        # sonet_group.get works with the sonet_group scope; socialnetwork.api.workgroup.list needs another one.
+        response = await client.call_raw(
+            "sonet_group.get", {"FILTER": group_filter, "ORDER": {"NAME": "ASC"}, "start": start}
         )
-        groups = (response.get("result") or {}).get("workgroups") or []
+        groups = response.get("result") or []
+        # The list does not say which groups are Scrum; only Scrum groups have a backlog.
+        backlogs, _ = await client.batch(
+            {f"g{g['ID']}": ("tasks.api.scrum.backlog.get", {"id": int(g["ID"])}) for g in groups}
+        )
         return {
-            "projects": [describe_group(g) for g in groups],
+            "projects": [describe_group(g, f"g{g['ID']}" in backlogs) for g in groups],
             "total": response.get("total", len(groups)),
             "next_start": response.get("next"),
         }

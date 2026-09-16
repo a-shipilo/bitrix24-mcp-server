@@ -82,30 +82,41 @@ async def test_batch_splits_into_chunks_of_50_and_collects_errors(bitrix):
     assert str(errors["t60"]) == "0: Task not found"
 
 
-async def test_projects_list(connect, bitrix):
+async def test_projects_list_marks_scrum_groups(connect, bitrix):
     bitrix.on(
-        "socialnetwork.api.workgroup.list",
-        {
-            "workgroups": [
-                {"id": "40", "name": "Мобильное приложение", "type": "scrum", "scrumMasterId": "3", "closed": "N"},
-                {"id": "41", "name": "Переезд офиса", "type": "project", "description": "x" * 500},
-            ]
-        },
-        total=2,
+        "sonet_group.get",
+        [
+            {"ID": "40", "NAME": "Мобильное приложение", "PROJECT": "Y", "CLOSED": "N", "NUMBER_OF_MEMBERS": "8"},
+            {"ID": "41", "NAME": "Переезд офиса", "PROJECT": "Y", "DESCRIPTION": "x" * 500},
+            {"ID": "42", "NAME": "Бухгалтерия", "PROJECT": "N"},
+        ],
+        total=3,
     )
+
+    def backlog(params):
+        if params["id"] == "40":
+            return {"result": {"id": 2, "groupId": 40}}
+        return {"error": 0, "error_description": "Backlog not found"}
+
+    bitrix.on("tasks.api.scrum.backlog.get", handler=backlog)
     async with connect() as session:
         result = payload(await session.call_tool("projects_list", {"query": "моб"}))
-    assert result["projects"][0] == {
+
+    scrum, project, group = result["projects"]
+    assert scrum == {
         "id": 40,
         "name": "Мобильное приложение",
         "type": "scrum",
         "type_name": "скрам",
         "closed": False,
-        "scrum_master_id": "3",
+        "members": "8",
     }
-    assert len(result["projects"][1]["description"]) == 301
-    [params] = bitrix.called("socialnetwork.api.workgroup.list")
-    assert params["filter"] == {"ACTIVE": "Y", "CLOSED": "N", "%NAME": "моб"}
+    assert (project["type"], group["type"]) == ("project", "group")
+    assert len(project["description"]) == 301
+    assert result["total"] == 3
+    [params] = bitrix.called("sonet_group.get")
+    assert params["FILTER"] == {"ACTIVE": "Y", "CLOSED": "N", "%NAME": "моб"}
+    assert len(bitrix.batches) == 1
 
 
 async def test_project_board_groups_tasks_by_stage(connect, bitrix):

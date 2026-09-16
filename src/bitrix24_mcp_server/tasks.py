@@ -233,7 +233,9 @@ def register_task_tools(mcp: FastMCP, get_client: Callable[[], Bitrix24Client], 
                     ) from comment_error
                 return {"id": id, "sent_to": "comments", "comment_id": comment_id}
 
-        summary = build_summary(f"Комментарий к {task_title(id, current)}", client.portal_url, [f"Текст: {text}"])
+        summary = build_summary(
+            f"Комментарий к задаче #{id}{quoted(current.get('title'))}", client.portal_url, [f"Текст: {text}"]
+        )
         return await approve(ctx, summary, run)
 
     @write_tool(_CREATE, "Добавить пункт в чек-лист задачи.")

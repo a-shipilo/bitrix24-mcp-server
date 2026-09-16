@@ -116,7 +116,7 @@ Every write operation requires explicit user approval. Run it with
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/a-shipilo/bitrix24-mcp-server@v0.1.0",
+        "git+https://github.com/a-shipilo/bitrix24-mcp-server@v0.1.1",
         "bitrix24-mcp-server"
       ],
       "env": {
@@ -130,7 +130,7 @@ Every write operation requires explicit user approval. Run it with
 3. Полностью перезапустите Claude Desktop. Сервер `bitrix24` появится в **Settings → Developer**
    со статусом *running*, а его инструменты — в меню подключений в чате.
 
-`@v0.1.0` фиксирует версию. Чтобы всегда брать последнюю версию из `main`, уберите `@v0.1.0`.
+`@v0.1.1` фиксирует версию. Чтобы всегда брать последнюю версию из `main`, уберите `@v0.1.1`.
 Для обновления добавьте в `args` перед `--from` флаг `--refresh`.
 
 Если в логах `spawn uvx ENOENT`, укажите полный путь к uvx (узнать его: `which uvx`),

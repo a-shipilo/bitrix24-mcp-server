@@ -15,6 +15,7 @@ from .approval import APPROVAL_MODES, ApprovalGate, ApprovalPolicy
 from .client import Bitrix24Client
 from .crm import register_crm_tools
 from .projects import register_project_tools
+from .schema import PlainSchemaFastMCP
 from .tasks import register_task_tools
 
 INSTRUCTIONS = """\
@@ -50,7 +51,7 @@ def create_server(
     confirm_tasks: bool = True,
     config_error: str | None = None,
 ) -> FastMCP:
-    mcp = FastMCP("bitrix24", instructions=INSTRUCTIONS, log_level="WARNING")
+    mcp = PlainSchemaFastMCP("bitrix24", instructions=INSTRUCTIONS, log_level="WARNING")
 
     def get_client() -> Bitrix24Client:
         if client is None:

@@ -208,6 +208,13 @@ async def test_task_comment_goes_to_task_chat(connect, bitrix):
     async with connect(confirm_tasks=False) as session:
         result = payload(await session.call_tool("task_add_comment", {"id": 8, "text": "Готово"}))
     assert result["result"] == {"id": 8, "sent_to": "task_chat"}
+
+
+async def test_task_comment_preview_wording(connect, bitrix):
+    bitrix.on("tasks.task.get", {"task": {"id": "8", "title": "Отчёт"}})
+    async with connect() as session:
+        pending = payload(await session.call_tool("task_add_comment", {"id": 8, "text": "Готово"}))
+    assert pending["preview"].startswith("Комментарий к задаче #8 «Отчёт»")
     assert bitrix.called("task.commentitem.add") == []
 
 
@@ -229,3 +236,24 @@ async def test_missing_configuration_is_reported_by_tools():
         result = await session.call_tool("crm_list", {"entity": "deal"})
     assert result.isError
     assert "BITRIX24_WEBHOOK_URL" in result.content[0].text
+
+
+async def test_optional_parameters_are_published_without_defaults(connect):
+    async with connect() as session:
+        tools = {t.name: t for t in (await session.list_tools()).tools}
+    for tool in tools.values():
+        for name, prop in tool.inputSchema["properties"].items():
+            assert "default" not in prop and "anyOf" not in prop, (tool.name, name)
+    stages = tools["crm_stages"].inputSchema
+    assert "required" not in stages
+    assert stages["properties"]["category_id"]["type"] == "integer"
+    assert stages["properties"]["entity"]["description"].endswith('По умолчанию "deal".')
+    assert tools["crm_list"].inputSchema["required"] == ["entity"]
+
+
+async def test_omitted_optional_parameters_get_python_defaults(connect, bitrix):
+    bitrix.on("crm.category.list", {"categories": []})
+    async with connect() as session:
+        result = await session.call_tool("crm_stages", {"category_id": None})
+    assert not result.isError
+    assert bitrix.called("crm.category.list") == [{"entityTypeId": 2}]
