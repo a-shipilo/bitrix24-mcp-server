@@ -11,18 +11,21 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from . import __version__
-from .approval import APPROVAL_MODES, ApprovalGate
+from .approval import APPROVAL_MODES, ApprovalGate, ApprovalPolicy
 from .client import Bitrix24Client
 from .crm import register_crm_tools
+from .projects import register_project_tools
 from .tasks import register_task_tools
 
 INSTRUCTIONS = """\
-Сервер работает с CRM и задачами Битрикс24 через входящий вебхук.
+Сервер работает с CRM, задачами, проектами и скрамом Битрикс24 через входящий вебхук.
 
 CRM (crm_*): поля в camelCase (title, stageId, opportunity, assignedById, ufCrm...).
 Названия полей и варианты списков — crm_fields, стадии сделок и статусы лидов — crm_stages.
 Задачи (task_*, tasks_list): поля запросов в UPPER_CASE (TITLE, RESPONSIBLE_ID), ответы в camelCase.
 ID сотрудников — users_search и user_current.
+Проекты и скрамы — projects_list. Канбан проекта — project_board, перенос по стадиям — task_move_stage.
+Скрам: спринты — scrum_sprints, доска спринта — sprint_board, перенос — sprint_move_task, бэклог — scrum_backlog.
 
 Любое создание, изменение или удаление требует согласия пользователя.
 Если инструмент вернул status=confirmation_required, операция ещё не выполнена:
@@ -55,7 +58,9 @@ def create_server(
         return client
 
     register_crm_tools(mcp, get_client, gate)
-    register_task_tools(mcp, get_client, gate, require_approval=confirm_tasks)
+    task_approval = ApprovalPolicy(gate, required=confirm_tasks)
+    register_task_tools(mcp, get_client, task_approval)
+    register_project_tools(mcp, get_client, task_approval)
     _register_approval_tools(mcp, gate)
     return mcp
 

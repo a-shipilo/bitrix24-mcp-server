@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -14,6 +15,29 @@ _WEBHOOK_RE = re.compile(r"^(?P<base>https?://[^/\s]+)/rest/(?P<user>\d+)/(?P<to
 
 # Bitrix24 answers these when the portal is throttling requests; waiting and retrying helps.
 _RETRYABLE_ERRORS = frozenset({"QUERY_LIMIT_EXCEEDED"})
+
+BATCH_LIMIT = 50
+
+
+def php_query(params: dict[str, Any]) -> str:
+    """Encode params the way PHP's http_build_query does (``filter[GROUP_ID]=5``), as ``batch`` expects."""
+    pairs: list[str] = []
+
+    def add(key: str, value: Any) -> None:
+        if isinstance(value, dict):
+            for sub_key, sub_value in value.items():
+                add(f"{key}[{sub_key}]", sub_value)
+        elif isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                add(f"{key}[{index}]", item)
+        elif value is not None:
+            if isinstance(value, bool):
+                value = "Y" if value else "N"
+            pairs.append(f"{quote(key, safe='[]')}={quote(str(value), safe='')}")
+
+    for key, value in params.items():
+        add(str(key), value)
+    return "&".join(pairs)
 
 
 class Bitrix24Error(Exception):
@@ -103,6 +127,26 @@ class Bitrix24Client:
                 raise Bitrix24Error(f"HTTP_{response.status_code}", self._redact(str(data)[:300]), response.status_code)
             return data
         raise AssertionError("unreachable")
+
+    async def batch(
+        self, commands: dict[str, tuple[str, dict[str, Any]]]
+    ) -> tuple[dict[str, Any], dict[str, Bitrix24Error]]:
+        """Run many independent calls, 50 per request. Returns results and errors keyed like ``commands``."""
+        results: dict[str, Any] = {}
+        errors: dict[str, Bitrix24Error] = {}
+        items = list(commands.items())
+        for offset in range(0, len(items), BATCH_LIMIT):
+            cmd = {
+                key: f"{method}?{php_query(params)}" if params else method
+                for key, (method, params) in items[offset : offset + BATCH_LIMIT]
+            }
+            data = await self.call("batch", {"halt": 0, "cmd": cmd}) or {}
+            if isinstance(data.get("result"), dict):
+                results.update(data["result"])
+            if isinstance(data.get("result_error"), dict):
+                for key, error in data["result_error"].items():
+                    errors[key] = Bitrix24Error(str(error.get("error")), str(error.get("error_description") or ""))
+        return results, errors
 
     async def aclose(self) -> None:
         await self._http.aclose()

@@ -129,6 +129,24 @@ class ApprovalGate:
             del self._pending[key]
 
 
+class ApprovalPolicy:
+    """Approval for a group of tools that the user may exempt from confirmation (e.g. tasks)."""
+
+    NOTE = " Требует подтверждения пользователя."
+
+    def __init__(self, gate: ApprovalGate, *, required: bool = True):
+        self.gate = gate
+        self.required = required
+
+    def describe(self, description: str) -> str:
+        return description + self.NOTE if self.required else description
+
+    async def request(self, ctx: Context, summary: str, run: Operation) -> dict[str, Any]:
+        if self.required:
+            return await self.gate.request(ctx, summary, run)
+        return {"status": "done", "result": await run()}
+
+
 def _supports_elicitation(ctx: Context) -> bool:
     try:
         session = ctx.session

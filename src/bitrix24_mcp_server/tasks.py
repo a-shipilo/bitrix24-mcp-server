@@ -8,7 +8,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from .approval import ApprovalGate, Operation
+from .approval import ApprovalPolicy
 from .client import Bitrix24Client, Bitrix24Error
 from .crm import PAGE_SIZE, compact
 from .preview import build_summary, change_lines, field_lines, quoted
@@ -31,6 +31,7 @@ DEFAULT_TASK_SELECT = [
     "RESPONSIBLE_ID",
     "CREATED_BY",
     "GROUP_ID",
+    "STAGE_ID",
     "DEADLINE",
     "CREATED_DATE",
     "CHANGED_DATE",
@@ -65,31 +66,23 @@ def describe_task(task: dict[str, Any]) -> dict[str, Any]:
     return task
 
 
-def register_task_tools(
-    mcp: FastMCP,
-    get_client: Callable[[], Bitrix24Client],
-    gate: ApprovalGate,
-    *,
-    require_approval: bool = True,
-) -> None:
+async def fetch_task(client: Bitrix24Client, task_id: int) -> dict[str, Any]:
+    result = await client.call("tasks.task.get", {"taskId": task_id})
+    if not result or not result.get("task"):
+        raise ToolError(f"Задача #{task_id} не найдена")
+    return result["task"]
+
+
+def task_title(task_id: int, task: dict[str, Any]) -> str:
+    """Genitive phrase for previews: «задачи #5 «Отчёт»»."""
+    return f"задачи #{task_id}{quoted(task.get('title'))}"
+
+
+def register_task_tools(mcp: FastMCP, get_client: Callable[[], Bitrix24Client], approval: ApprovalPolicy) -> None:
     def write_tool(annotations: ToolAnnotations, description: str):
-        if require_approval:
-            description += " Требует подтверждения пользователя."
-        return mcp.tool(annotations=annotations, description=description)
+        return mcp.tool(annotations=annotations, description=approval.describe(description))
 
-    async def approve(ctx: Context, summary: str, run: Operation) -> dict[str, Any]:
-        if require_approval:
-            return await gate.request(ctx, summary, run)
-        return {"status": "done", "result": await run()}
-
-    async def fetch_task(task_id: int) -> dict[str, Any]:
-        result = await get_client().call("tasks.task.get", {"taskId": task_id})
-        if not result or not result.get("task"):
-            raise ToolError(f"Задача #{task_id} не найдена")
-        return result["task"]
-
-    def task_title(task_id: int, task: dict[str, Any]) -> str:
-        return f"задачи #{task_id}{quoted(task.get('title'))}"
+    approve = approval.request
 
     @mcp.tool(annotations=_READ)
     async def tasks_list(
@@ -99,7 +92,8 @@ def register_task_tools(
                 description=(
                     "Фильтр в UPPER_CASE с префиксами >, >=, <, <=, !, %. Статусы (REAL_STATUS): "
                     "2 — ждёт выполнения, 3 — выполняется, 4 — ждёт контроля, 5 — завершена, 6 — отложена; "
-                    "STATUS: -1 — просрочена. Пример: "
+                    "STATUS: -1 — просрочена. GROUP_ID — проект, STAGE_ID — стадия канбана, "
+                    "SPRINT_ID и BACKLOG_ID — спринт и бэклог скрама. Пример: "
                     '{"RESPONSIBLE_ID": 1, "!REAL_STATUS": 5, "<DEADLINE": "2026-10-01"}'
                 )
             ),
@@ -134,7 +128,7 @@ def register_task_tools(
     @mcp.tool(annotations=_READ)
     async def task_get(id: TaskIdArg) -> dict[str, Any]:
         """Получить задачу со всеми заполненными полями, включая описание."""
-        return describe_task(await fetch_task(id))
+        return describe_task(await fetch_task(get_client(), id))
 
     @mcp.tool(annotations=_READ)
     async def task_checklist(id: TaskIdArg) -> list[dict[str, Any]]:
@@ -171,7 +165,7 @@ def register_task_tools(
         if not fields:
             raise ToolError("Не переданы изменяемые поля")
         client = get_client()
-        current = await fetch_task(id)
+        current = await fetch_task(client, id)
 
         async def run() -> dict[str, Any]:
             result = await client.call("tasks.task.update", {"taskId": id, "fields": fields})
@@ -185,7 +179,7 @@ def register_task_tools(
     @write_tool(_CHANGE, "Завершить задачу.")
     async def task_complete(id: TaskIdArg, ctx: Context) -> dict[str, Any]:
         client = get_client()
-        current = await fetch_task(id)
+        current = await fetch_task(client, id)
 
         async def run() -> dict[str, Any]:
             result = await client.call("tasks.task.complete", {"taskId": id})
@@ -196,7 +190,7 @@ def register_task_tools(
     @write_tool(_CHANGE, "Удалить задачу.")
     async def task_delete(id: TaskIdArg, ctx: Context) -> dict[str, Any]:
         client = get_client()
-        current = await fetch_task(id)
+        current = await fetch_task(client, id)
 
         async def run() -> dict[str, Any]:
             await client.call("tasks.task.delete", {"taskId": id})
@@ -219,7 +213,7 @@ def register_task_tools(
         ctx: Context,
     ) -> dict[str, Any]:
         client = get_client()
-        current = await fetch_task(id)
+        current = await fetch_task(client, id)
 
         async def run() -> dict[str, Any]:
             try:
@@ -249,7 +243,7 @@ def register_task_tools(
         ctx: Context,
     ) -> dict[str, Any]:
         client = get_client()
-        current = await fetch_task(id)
+        current = await fetch_task(client, id)
 
         async def run() -> dict[str, Any]:
             item_id = await client.call("task.checklistitem.add", {"TASKID": id, "FIELDS": {"TITLE": title}})
@@ -267,7 +261,7 @@ def register_task_tools(
         ctx: Context,
     ) -> dict[str, Any]:
         client = get_client()
-        current = await fetch_task(id)
+        current = await fetch_task(client, id)
 
         async def run() -> dict[str, Any]:
             await client.call("task.checklistitem.complete", {"TASKID": id, "ITEMID": item_id})

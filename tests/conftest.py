@@ -2,6 +2,7 @@ import json
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import parse_qsl
 
 import httpx
 import pytest
@@ -22,6 +23,7 @@ class FakeBitrix:
     def __init__(self) -> None:
         self.handlers: dict[str, Handler] = {}
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.batches: list[dict[str, str]] = []
 
     def on(self, method: str, result: Any = None, *, handler: Handler | None = None, **extra: Any) -> None:
         self.handlers[method] = handler or (lambda _params: {"result": result, **extra})
@@ -35,15 +37,32 @@ class FakeBitrix:
             if "/rest/api/" in request.url.path:
                 method = f"v3:{method}"
             params = json.loads(request.content or b"{}")
-            self.calls.append((method, params))
-            handler = self.handlers.get(method)
-            if handler is None:
-                return httpx.Response(404, json={"error": "ERROR_METHOD_NOT_FOUND", "error_description": method})
-            body = handler(params)
-            status = 400 if "error" in body else 200
+            if method == "batch":
+                return httpx.Response(200, json=self._batch(params["cmd"]))
+            body = self._dispatch(method, params)
+            status = (404 if body["error"] == "ERROR_METHOD_NOT_FOUND" else 400) if "error" in body else 200
             return httpx.Response(status, json=body)
 
         return httpx.MockTransport(handle)
+
+    def _dispatch(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append((method, params))
+        handler = self.handlers.get(method)
+        if handler is None:
+            return {"error": "ERROR_METHOD_NOT_FOUND", "error_description": method}
+        return handler(params)
+
+    def _batch(self, commands: dict[str, str]) -> dict[str, Any]:
+        self.batches.append(commands)
+        results, errors = {}, {}
+        for key, command in commands.items():
+            method, _, query = command.partition("?")
+            body = self._dispatch(method, dict(parse_qsl(query)))
+            if "error" in body:
+                errors[key] = body
+            else:
+                results[key] = body["result"]
+        return {"result": {"result": results or [], "result_error": errors or []}}
 
     def client(self, **kwargs: Any) -> Bitrix24Client:
         return Bitrix24Client(WEBHOOK, transport=self.transport(), retry_delay=0, **kwargs)

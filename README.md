@@ -3,12 +3,13 @@
 [![CI](https://github.com/a-shipilo/bitrix24-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/a-shipilo/bitrix24-mcp-server/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-MCP-сервер для работы Claude с **CRM и задачами Битрикс24** через входящий вебхук.
+MCP-сервер для работы Claude с **CRM, задачами, проектами и скрамом Битрикс24** через входящий вебхук.
 Запускается через `uvx` прямо из GitHub, устанавливать ничего не нужно.
 
 Любое создание, изменение или удаление выполняется **только после подтверждения пользователем**.
 
-*English: an open-source MCP server for Bitrix24 CRM (leads, deals, contacts, companies) and tasks.
+*English: an open-source MCP server for Bitrix24 CRM (leads, deals, contacts, companies), tasks,
+project kanban boards and Scrum sprints.
 Every write operation requires explicit user approval. Run it with
 `uvx --from git+https://github.com/a-shipilo/bitrix24-mcp-server bitrix24-mcp-server`.*
 
@@ -39,6 +40,18 @@ Every write operation requires explicit user approval. Run it with
 | `task_add_comment` ✋ | комментарий: в чат задачи, а на старых порталах — в ленту комментариев |
 | `task_checklist`, `task_checklist_add` ✋, `task_checklist_complete` ✋ | чек-листы |
 | `users_search`, `user_current` | поиск сотрудников, например чтобы узнать ID ответственного |
+
+**Проекты и скрам**
+
+| Инструмент | Что делает |
+|---|---|
+| `projects_list` | поиск проектов, рабочих групп и скрамов |
+| `project_board` | канбан проекта: стадии и задачи на них |
+| `task_move_stage` ✋ | перенос задачи на другую стадию канбана проекта |
+| `scrum_sprints` | спринты скрама: активный, запланированные, завершённые |
+| `sprint_board` | доска спринта: стадии, задачи, story points и эпики |
+| `sprint_move_task` ✋ | перенос задачи на другую стадию спринта |
+| `scrum_backlog` | бэклог в порядке приоритета со story points и эпиками |
 
 ✋ — операция выполняется только после подтверждения пользователем.
 
@@ -72,7 +85,15 @@ Every write operation requires explicit user approval. Run it with
 ### 1. Создайте входящий вебхук в Битрикс24
 
 1. Откройте **Приложения → Разработчикам → Другое → Входящий вебхук**.
-2. Выдайте права: **CRM (crm)**, **Задачи (task)**, **Пользователи (user)**.
+2. Выдайте права:
+
+   | Право | Для чего |
+   |---|---|
+   | **CRM** (`crm`) | лиды, сделки, контакты, компании |
+   | **Задачи** (`task`) | задачи, чек-листы, канбан проектов, спринты и бэклог |
+   | **Пользователи (минимальные)** (`user_brief`) | поиск сотрудников. Чтобы видеть их e-mail, выберите **Пользователи (базовые)** (`user_basic`) |
+   | **Рабочие группы** (`sonet_group`) | список проектов и скрамов |
+
 3. Скопируйте адрес вида `https://<ваш-портал>.bitrix24.ru/rest/1/xxxxxxxxxxxxxxxx/`.
 
 > [!WARNING]
@@ -136,6 +157,8 @@ claude mcp add bitrix24 -e BITRIX24_WEBHOOK_URL=https://your-portal.bitrix24.ru/
 - «Переведи сделку 1542 в "Успешно" и оставь комментарий "Договор подписан"»
 - «Создай задачу Анне Смирновой подготовить КП по сделке 1542 до пятницы»
 - «Какие мои задачи просрочены?»
+- «Покажи доску текущего спринта в скраме "Мобильное приложение" и сколько story points осталось»
+- «Что сейчас в работе в проекте "Переезд офиса"? Перенеси задачу 318 в "Готово"»
 
 ## Разработка
 
