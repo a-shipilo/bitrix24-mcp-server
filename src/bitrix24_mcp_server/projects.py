@@ -200,6 +200,26 @@ def scrum_row(task: dict[str, Any], details: dict[str, Any] | None, epics: dict[
     return row
 
 
+async def placement_by_filter(
+    client: Bitrix24Client, base_filter: dict[str, Any], stages: list[dict[str, Any]], key: str, max_tasks: int
+) -> dict[int, int] | None:
+    """Ask the task list for each column in turn; None if the portal ignores or rejects the filter."""
+    try:
+        pages = await asyncio.gather(
+            *(load_tasks(client, {**base_filter, key: stage["id"]}, max_tasks) for stage in stages)
+        )
+    except Bitrix24Error:
+        return None
+    mapping: dict[int, int] = {}
+    for stage, (found, _) in zip(stages, pages, strict=True):
+        for task in found:
+            task_id = int(task["id"])
+            if task_id in mapping:  # the filter was ignored, the answer is meaningless
+                return None
+            mapping[task_id] = stage["id"]
+    return mapping or None
+
+
 async def resolve_sprint_stages(
     client: Bitrix24Client,
     base_filter: dict[str, Any],
@@ -207,20 +227,21 @@ async def resolve_sprint_stages(
     tasks: list[dict[str, Any]],
     max_tasks: int,
 ) -> dict[int, int] | None:
-    """Find which sprint kanban column each task is in, or None if the portal does not tell."""
+    """Find which sprint kanban column each task is in, or None if the portal does not tell.
+
+    The sprint board keeps its columns apart from the task's own STAGE_ID, and the two can disagree:
+    a task put on the board through tasks.api.scrum.kanban.addTask keeps STAGE_ID = 0. The STAGES_ID
+    filter reads the board itself, so it goes first. Unlike project kanban, 0 does not mean the first column.
+    """
+    if not tasks or not stages:
+        return None
+    for key in ("STAGES_ID", "STAGE_ID"):
+        mapping = await placement_by_filter(client, base_filter, stages, key, max_tasks)
+        if mapping is not None:
+            return mapping
     stage_ids = {s["id"] for s in stages}
-    if any(as_int(t.get("stageId")) in stage_ids for t in tasks):
-        return direct_stage_map(stages, tasks)
-    # Scrum tasks may keep the sprint column outside the task's own STAGE_ID: ask per column instead.
-    mapping: dict[int, int] = {}
-    for stage in stages:
-        found, _ = await load_tasks(client, {**base_filter, "STAGE_ID": stage["id"]}, max_tasks)
-        for task in found:
-            task_id = int(task["id"])
-            if task_id in mapping:  # the filter was ignored, the answer is meaningless
-                return None
-            mapping[task_id] = stage["id"]
-    return mapping or None
+    direct = {int(t["id"]): as_int(t.get("stageId")) for t in tasks if as_int(t.get("stageId")) in stage_ids}
+    return direct or None
 
 
 def register_project_tools(mcp: FastMCP, get_client: Callable[[], Bitrix24Client], approval: ApprovalPolicy) -> None:

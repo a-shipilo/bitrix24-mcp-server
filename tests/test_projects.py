@@ -34,7 +34,11 @@ def task(task_id: int, stage: int = 0, **fields: Any) -> dict[str, Any]:
 
 
 def task_list(tasks: list[dict[str, Any]], page_size: int = 50, stage_filter: bool = True):
-    """tasks.task.list over an in-memory table, honouring ID/STAGE_ID filters and paging."""
+    """tasks.task.list over an in-memory table, honouring ID, STAGE_ID and STAGES_ID filters and paging.
+
+    ``_board_stage`` answers the STAGE_ID filter and ``_board_column`` the STAGES_ID filter; a table without
+    ``_board_column`` values behaves like a portal that ignores STAGES_ID.
+    """
 
     def handler(params: dict[str, Any]) -> dict[str, Any]:
         flt = params.get("filter", {})
@@ -43,6 +47,8 @@ def task_list(tasks: list[dict[str, Any]], page_size: int = 50, stage_filter: bo
             rows = [t for t in rows if int(t["id"]) == flt["ID"]]
         if stage_filter and "STAGE_ID" in flt:
             rows = [t for t in rows if t.get("_board_stage") == flt["STAGE_ID"]]
+        if "STAGES_ID" in flt and any("_board_column" in t for t in tasks):
+            rows = [t for t in rows if t.get("_board_column") == flt["STAGES_ID"]]
         start = params.get("start", 0)
         page = [{k: v for k, v in t.items() if not k.startswith("_")} for t in rows[start : start + page_size]]
         body: dict[str, Any] = {"result": {"tasks": page}, "total": len(rows)}
@@ -197,13 +203,19 @@ def setup_sprint(bitrix, tasks, scrum_fields, *, stage_filter=True):
     bitrix.on("tasks.api.scrum.epic.list", [{"id": 9, "groupId": 40, "name": "Онбординг"}])
 
 
-async def test_sprint_board_uses_task_stage_ids(connect, bitrix):
-    tasks = [task(1, 51), task(2, 52), task(3, 52), task(4, 0)]
+async def test_sprint_board_reads_columns_from_the_board(connect, bitrix):
+    # Task 4 sits in "Готово" on the board, but its own stageId was reset to 0 (as after kanban.addTask).
+    tasks = [
+        task(1, 51, _board_column=51),
+        task(2, 52, _board_column=52),
+        task(3, 52, _board_column=52),
+        task(4, 0, _board_column=53),
+    ]
     fields = {
         1: {"entityId": 5, "storyPoints": "3", "epicId": 9},
         2: {"entityId": 5, "storyPoints": "5", "epicId": 0},
         3: {"entityId": 5, "storyPoints": "?", "epicId": 77},
-        4: {"entityId": 5, "storyPoints": ""},
+        4: {"entityId": 5, "storyPoints": "2"},
     }
     setup_sprint(bitrix, tasks, fields)
     async with connect() as session:
@@ -212,15 +224,17 @@ async def test_sprint_board_uses_task_stage_ids(connect, bitrix):
     assert board["sprint"]["name"] == "Спринт 7"
     assert board["sprint"]["status_name"] == "активный"
     new, work, done = board["stages"]
-    assert [t["id"] for t in new["tasks"]] == [1, 4]
+    assert [t["id"] for t in new["tasks"]] == [1]
+    assert [t["id"] for t in done["tasks"]] == [4]
     assert new["tasks"][0]["story_points"] == "3"
     assert new["tasks"][0]["epic"] == "Онбординг"
     assert new["story_points"] == 3
     assert work["story_points"] == 5  # "?" is not a number
     assert work["tasks"][1]["epic"] == 77  # unknown epic keeps its ID
-    assert done["task_count"] == 0
-    assert "notes" not in board
-    assert bitrix.called("tasks.task.list")[0]["filter"] == {"GROUP_ID": 40, "SPRINT_ID": 5}
+    assert "notes" not in board and "tasks_without_stage" not in board
+    list_filters = [c["filter"] for c in bitrix.called("tasks.task.list")]
+    assert list_filters[0] == {"GROUP_ID": 40, "SPRINT_ID": 5}
+    assert sorted(f["STAGES_ID"] for f in list_filters[1:]) == [51, 52, 53]
     assert len(bitrix.batches) == 1
     assert bitrix.called("tasks.api.scrum.sprint.list")[0]["filter"] == {"GROUP_ID": 40, "STATUS": "active"}
 
@@ -235,8 +249,20 @@ async def test_sprint_board_falls_back_to_stage_filter(connect, bitrix):
     assert [t["id"] for t in done["tasks"]] == [2]
     assert new["tasks"] == []
     assert [t["id"] for t in board["tasks_without_stage"]] == [3]
-    stage_filters = [c["filter"].get("STAGE_ID") for c in bitrix.called("tasks.task.list")]
-    assert stage_filters == [None, 51, 52, 53]
+    filters = [c["filter"] for c in bitrix.called("tasks.task.list")]
+    assert sorted(f["STAGES_ID"] for f in filters if "STAGES_ID" in f) == [51, 52, 53]
+    assert sorted(f["STAGE_ID"] for f in filters if "STAGE_ID" in f) == [51, 52, 53]
+
+
+async def test_sprint_board_falls_back_to_task_stage_ids(connect, bitrix):
+    tasks = [task(1, 51), task(2, 52), task(3, 0)]
+    setup_sprint(bitrix, tasks, {})
+    async with connect() as session:
+        board = payload(await session.call_tool("sprint_board", {"sprint_id": 5}))
+    new, work, _ = board["stages"]
+    assert [t["id"] for t in new["tasks"]] == [1]
+    assert [t["id"] for t in work["tasks"]] == [2]
+    assert [t["id"] for t in board["tasks_without_stage"]] == [3]  # 0 is not the first column in a sprint
 
 
 async def test_sprint_board_without_stage_information(connect, bitrix):
